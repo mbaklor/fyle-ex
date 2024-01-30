@@ -6,58 +6,68 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
-    "slices"
 )
 
-func (a *App) GetAbsPath(rel string) string {
-	return filepath.Join(a.dir, rel)
+func (dl *DirList) GetAbsPath(rel string) string {
+	return filepath.Join(dl.currentDir, rel)
 }
 
-func (a *App) ChangeDir(location string) error {
+func (dl *DirList) ChangeDir(location string) (err error) {
 	if filepath.IsAbs(location) {
-		a.dir = location
+		dl.currentDir = location
 	} else {
-		path := a.GetAbsPath(location)
+		path := dl.GetAbsPath(location)
 		if _, err := os.Stat(path); err == nil {
-			a.dir = path
+			dl.currentDir = path
 		}
 	}
-	tree, err := a.GetFileTree(a.dir)
+	dl.tree, err = dl.GetFileTree(dl.currentDir)
 	if err != nil {
 		return err
 	}
-	if a.OnDirChange != nil {
-		a.OnDirChange(tree)
+	dl.topLabel.SetText(dl.currentDir)
+	dl.Refresh()
+	if val, ok := dl.dirCache[dl.currentDir]; ok && val != -1 {
+		dl.list.Select(val)
+		dl.selected = val
+	} else {
+		dl.list.UnselectAll()
+		dl.selected = -1
+		dl.dirCache[dl.currentDir] = -1
+	}
+	if dl.OnDirChange != nil {
+		dl.OnDirChange(dl.tree)
 	}
 	return nil
 }
 
-func (a *App) GetFileTree(location string) ([]fs.DirEntry, error) {
+func (dl *DirList) GetFileTree(location string) ([]fs.DirEntry, error) {
 	dir, err := os.ReadDir(location)
 	if err != nil {
 		return nil, err
 	}
 	tree := make([]fs.DirEntry, 0, len(dir))
 	for _, t := range dir {
-		protected, err := a.CheckFileProtected(t.Name())
+		protected, err := dl.CheckFileProtected(t.Name())
 		if err != nil {
-			fmt.Println(err)
+			fmt.Println("get tree:", err)
 			continue
 		}
 		if !protected {
 			tree = append(tree, t)
 		}
 	}
-	a.SortTree(tree)
+	dl.SortTree(tree)
 	if err != nil {
 		return nil, err
 	}
 	return tree, nil
 }
 
-func (a *App) SortTree(tree []fs.DirEntry) []fs.DirEntry {
+func (dl *DirList) SortTree(tree []fs.DirEntry) []fs.DirEntry {
 	slices.SortFunc(tree, func(a, b fs.DirEntry) int {
 		an, bn := 0, 0
 		if !a.IsDir() {
@@ -75,10 +85,10 @@ func (a *App) SortTree(tree []fs.DirEntry) []fs.DirEntry {
 	return tree
 }
 
-func (a *App) CheckFileProtected(path string) (bool, error) {
-	path, err := filepath.Abs(a.GetAbsPath(path))
+func (dl *DirList) CheckFileProtected(path string) (bool, error) {
+	path, err := filepath.Abs(dl.GetAbsPath(path))
 	if err != nil {
-		fmt.Println(err)
+		fmt.Println("protected:", err)
 	}
 	pointer, err := syscall.UTF16PtrFromString(`\\?\` + path)
 	if err != nil {
